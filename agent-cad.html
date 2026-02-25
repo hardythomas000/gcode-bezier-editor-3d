@@ -97,6 +97,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
       </select>
       <button id="btn-res" title="Toggle resolution">Res: 2</button>
       <button id="btn-sound" title="Toggle sound">Snd</button>
+      <button id="btn-topo" title="Show face/edge topology">Topo</button>
       <button id="btn-stl" title="Export STL">STL</button>
     </div>
     <div style="position:relative;flex:1;display:flex;flex-direction:column;min-height:0">
@@ -369,6 +370,136 @@ class Elongate extends SDF {
   bounds(){const b=this.child.bounds(),e=this.ext;return{min:[b.min[0]-e[0],b.min[1]-e[1],b.min[2]-e[2]],max:[b.max[0]+e[0],b.max[1]+e[1],b.max[2]+e[2]]}}
 }
 
+// ─── Topology (named face/edge identification for LLM) ───
+SDF.prototype.faces = function(){return []};
+SDF.prototype.classifyPoint = function(){return null};
+
+Sphere.prototype.faces = function(){return [{name:'surface',origin:[0,0,0]}]};
+Sphere.prototype.classifyPoint = function(){return 'surface'};
+
+Box.prototype.faces = function(){
+  const[hx,hy,hz]=this.half;
+  return[
+    {name:'right',origin:[hx,0,0]},{name:'left',origin:[-hx,0,0]},
+    {name:'top',origin:[0,hy,0]},{name:'bottom',origin:[0,-hy,0]},
+    {name:'front',origin:[0,0,hz]},{name:'back',origin:[0,0,-hz]}
+  ];
+};
+Box.prototype.classifyPoint = function(p){
+  const dx=Math.abs(Math.abs(p[0])-this.half[0]);
+  const dy=Math.abs(Math.abs(p[1])-this.half[1]);
+  const dz=Math.abs(Math.abs(p[2])-this.half[2]);
+  if(dx<=dy&&dx<=dz)return p[0]>=0?'right':'left';
+  if(dy<=dx&&dy<=dz)return p[1]>=0?'top':'bottom';
+  return p[2]>=0?'front':'back';
+};
+
+Cylinder.prototype.faces = function(){
+  const hh=this.h/2;
+  return[
+    {name:'top_cap',origin:[0,0,hh]},
+    {name:'bottom_cap',origin:[0,0,-hh]},
+    {name:'barrel',origin:[this.r,0,0]}
+  ];
+};
+Cylinder.prototype.classifyPoint = function(p){
+  const hh=this.h/2;
+  const dCap=Math.abs(Math.abs(p[2])-hh);
+  const dBarrel=Math.abs(len2d(p[0],p[1])-this.r);
+  if(dCap<dBarrel)return p[2]>=0?'top_cap':'bottom_cap';
+  return 'barrel';
+};
+
+Cone.prototype.faces = function(){
+  return[{name:'base',origin:[0,0,-this.h]},{name:'surface',origin:[this.r/2,0,-this.h/2]}];
+};
+Cone.prototype.classifyPoint = function(p){
+  const dBase=Math.abs(p[2]+this.h);
+  const r=len2d(p[0],p[1]);
+  const expectedR=this.r*Math.max(0,-p[2]/this.h);
+  return Math.abs(r-expectedR)>dBase?'base':'surface';
+};
+
+Torus.prototype.faces = function(){return [{name:'surface',origin:[this.R,0,0]}]};
+Torus.prototype.classifyPoint = function(){return 'surface'};
+
+Plane.prototype.faces = function(){return [{name:'surface',origin:[0,0,0]}]};
+Plane.prototype.classifyPoint = function(){return 'surface'};
+
+// Boolean topology
+Union.prototype.faces = function(){
+  const af=this.a.faces(),bf=this.b.faces();
+  const clash=af.some(f=>bf.some(g=>g.name===f.name));
+  if(clash)return[...af.map(f=>({...f,name:'a.'+f.name})),...bf.map(f=>({...f,name:'b.'+f.name}))];
+  return[...af,...bf];
+};
+Union.prototype.classifyPoint = function(p){
+  const dA=this.a.evaluate(p),dB=this.b.evaluate(p);
+  const af=this.a.faces(),bf=this.b.faces();
+  const clash=af.some(f=>bf.some(g=>g.name===f.name));
+  if(Math.abs(dA)<Math.abs(dB)){const c=this.a.classifyPoint(p);return clash&&c?'a.'+c:c}
+  const c=this.b.classifyPoint(p);return clash&&c?'b.'+c:c;
+};
+
+Subtract.prototype.faces = function(){
+  const af=this.a.faces();
+  const bf=this.b.faces().map(f=>({...f,name:'cut.'+f.name}));
+  return[...af,...bf];
+};
+Subtract.prototype.classifyPoint = function(p){
+  const dA=this.a.evaluate(p),dB=this.b.evaluate(p);
+  if(Math.abs(dB)<Math.abs(dA)){const c=this.b.classifyPoint(p);return c?'cut.'+c:null}
+  return this.a.classifyPoint(p);
+};
+
+Intersect.prototype.faces = Union.prototype.faces;
+Intersect.prototype.classifyPoint = function(p){
+  const dA=this.a.evaluate(p),dB=this.b.evaluate(p);
+  const af=this.a.faces(),bf=this.b.faces();
+  const clash=af.some(f=>bf.some(g=>g.name===f.name));
+  if(Math.abs(dA)>Math.abs(dB)){const c=this.b.classifyPoint(p);return clash&&c?'b.'+c:c}
+  const c=this.a.classifyPoint(p);return clash&&c?'a.'+c:c;
+};
+
+SmoothUnion.prototype.faces = Union.prototype.faces;
+SmoothUnion.prototype.classifyPoint = Union.prototype.classifyPoint;
+SmoothSubtract.prototype.faces = Subtract.prototype.faces;
+SmoothSubtract.prototype.classifyPoint = Subtract.prototype.classifyPoint;
+SmoothIntersect.prototype.faces = Intersect.prototype.faces;
+SmoothIntersect.prototype.classifyPoint = Intersect.prototype.classifyPoint;
+
+// Transform topology — delegate to child
+Translate.prototype.faces = function(){
+  return this.child.faces().map(f=>({...f,origin:f.origin?vAdd(f.origin,this.off):f.origin}));
+};
+Translate.prototype.classifyPoint = function(p){return this.child.classifyPoint(vSub(p,this.off))};
+
+RotateAxis.prototype.faces = function(){return this.child.faces()};
+RotateAxis.prototype.classifyPoint = function(p){
+  const{c,s}=this;let rp;
+  switch(this.axis){
+    case'x':rp=[p[0],c*p[1]-s*p[2],s*p[1]+c*p[2]];break;
+    case'y':rp=[c*p[0]+s*p[2],p[1],-s*p[0]+c*p[2]];break;
+    case'z':rp=[c*p[0]-s*p[1],s*p[0]+c*p[1],p[2]];break;
+  }
+  return this.child.classifyPoint(rp);
+};
+
+Scale.prototype.faces = function(){
+  return this.child.faces().map(f=>({...f,origin:f.origin?[f.origin[0]*this.f,f.origin[1]*this.f,f.origin[2]*this.f]:f.origin}));
+};
+Scale.prototype.classifyPoint = function(p){return this.child.classifyPoint([p[0]/this.f,p[1]/this.f,p[2]/this.f])};
+
+Mirror.prototype.faces = function(){return this.child.faces()};
+Mirror.prototype.classifyPoint = function(p){const q=[...p];q[this.idx]=Math.abs(q[this.idx]);return this.child.classifyPoint(q)};
+
+Shell.prototype.faces = function(){return this.child.faces()};
+Shell.prototype.classifyPoint = function(p){return this.child.classifyPoint(p)};
+Round.prototype.faces = function(){return this.child.faces()};
+Round.prototype.classifyPoint = function(p){return this.child.classifyPoint(p)};
+Elongate.prototype.faces = function(){return this.child.faces()};
+Elongate.prototype.classifyPoint = function(p){return this.child.classifyPoint(p)};
+
 // ─── Factory functions ───
 const sphere = r => new Sphere(r);
 const box = (w,h,d) => new Box(w,h,d);
@@ -519,7 +650,8 @@ addAxis([0,0,1], 0x5252e0);
 const modelGroup = new THREE.Group();
 const edgeGroup = new THREE.Group();
 const wireGroup = new THREE.Group();
-scene.add(modelGroup, edgeGroup, wireGroup);
+const topoGroup = new THREE.Group(); // Face/edge label sprites
+scene.add(modelGroup, edgeGroup, wireGroup, topoGroup);
 
 // Display modes
 let displayMode = 'shaded-edge'; // shaded, shaded-edge, wire
@@ -538,6 +670,137 @@ function updateDisplayMode() {
     displayMode === 'shaded' ? 'Shaded' : displayMode === 'shaded-edge' ? 'S+Edge' : 'Wire';
 }
 updateDisplayMode();
+
+// ════════════════════════════════════════════════════════════════
+// SECTION 4b: TOPOLOGY VISUALIZATION
+// ════════════════════════════════════════════════════════════════
+
+const FACE_COLORS = [
+  '#e87040','#9b59b6','#7ec850','#e05252','#3498db',
+  '#f1c40f','#1abc9c','#e74c8a','#52e0e0','#b87333',
+  '#8e44ad','#27ae60','#c9a84c','#e67e22','#2980b9',
+];
+
+let topoEnabled = false;
+
+const topoMat = new THREE.MeshStandardMaterial({
+  vertexColors: true, metalness: 0.1, roughness: 0.65,
+  side: THREE.DoubleSide, flatShading: true,
+});
+
+function makeTextSprite(text, hexColor, scale = 1) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const fontSize = 36;
+  const pad = 12;
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  const tw = ctx.measureText(text).width;
+  const w = tw + pad * 2;
+  const h = fontSize + pad;
+  canvas.width = w; canvas.height = h;
+  // Rounded bg
+  ctx.fillStyle = 'rgba(10,10,12,0.88)';
+  const r = 8;
+  ctx.beginPath();
+  ctx.moveTo(r,0);ctx.lineTo(w-r,0);ctx.quadraticCurveTo(w,0,w,r);
+  ctx.lineTo(w,h-r);ctx.quadraticCurveTo(w,h,w-r,h);
+  ctx.lineTo(r,h);ctx.quadraticCurveTo(0,h,0,h-r);
+  ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);
+  ctx.fill();
+  // Border
+  ctx.strokeStyle = hexColor; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(r,0);ctx.lineTo(w-r,0);ctx.quadraticCurveTo(w,0,w,r);
+  ctx.lineTo(w,h-r);ctx.quadraticCurveTo(w,h,w-r,h);
+  ctx.lineTo(r,h);ctx.quadraticCurveTo(0,h,0,h-r);
+  ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);
+  ctx.stroke();
+  // Text
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.fillStyle = hexColor;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, w/2, h/2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, sizeAttenuation: true });
+  const sprite = new THREE.Sprite(mat);
+  const s = scale * 0.35;
+  sprite.scale.set(w/h * s * 10, s * 10, 1);
+  return sprite;
+}
+
+function applyTopoOverlay(sdf, geometry) {
+  topoGroup.clear();
+  if (!sdf || !geometry) return;
+
+  const pos = geometry.getAttribute('position').array;
+  const colors = new Float32Array(pos.length);
+  const faceGroups = new Map(); // faceName → {colorIdx, positions}
+  let colorIdx = 0;
+
+  // Classify every vertex
+  for (let i = 0; i < pos.length; i += 3) {
+    const p = [pos[i], pos[i+1], pos[i+2]];
+    const faceName = sdf.classifyPoint(p) || 'unknown';
+    if (!faceGroups.has(faceName)) {
+      faceGroups.set(faceName, { idx: colorIdx++, positions: [] });
+    }
+    const fg = faceGroups.get(faceName);
+    const hex = FACE_COLORS[fg.idx % FACE_COLORS.length];
+    const c = new THREE.Color(hex);
+    colors[i] = c.r; colors[i+1] = c.g; colors[i+2] = c.b;
+    fg.positions.push(p);
+  }
+
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // Create label sprites at centroid of each face group
+  const b = sdf.bounds();
+  const maxDim = Math.max(b.max[0]-b.min[0], b.max[1]-b.min[1], b.max[2]-b.min[2]);
+  const labelScale = Math.max(0.3, maxDim / 100);
+
+  for (const [name, fg] of faceGroups) {
+    const hex = FACE_COLORS[fg.idx % FACE_COLORS.length];
+    // Compute centroid
+    let cx=0, cy=0, cz=0;
+    for (const p of fg.positions) { cx+=p[0]; cy+=p[1]; cz+=p[2]; }
+    const n = fg.positions.length;
+    cx/=n; cy/=n; cz/=n;
+
+    // Offset label slightly outward from surface (along gradient)
+    const grad = sdf.gradient([cx,cy,cz]);
+    const offset = maxDim * 0.08;
+    const lx = cx + grad[0]*offset;
+    const ly = cy + grad[1]*offset;
+    const lz = cz + grad[2]*offset;
+
+    // Display name in uppercase with dots replaced
+    const label = name.toUpperCase().replace(/\./g, ' ');
+    const sprite = makeTextSprite(label, hex, labelScale);
+    sprite.position.set(lx, ly, lz);
+    topoGroup.add(sprite);
+
+    // Add a thin line from label to surface
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(cx,cy,cz), new THREE.Vector3(lx,ly,lz)
+    ]);
+    const lineMat = new THREE.LineBasicMaterial({ color: hex, opacity: 0.6, transparent: true });
+    topoGroup.add(new THREE.Line(lineGeo, lineMat));
+  }
+}
+
+function toggleTopo() {
+  topoEnabled = !topoEnabled;
+  document.getElementById('btn-topo').classList.toggle('active', topoEnabled);
+  topoGroup.visible = topoEnabled;
+
+  // Swap mesh material
+  modelGroup.traverse(child => {
+    if (child.isMesh) {
+      child.material = topoEnabled ? topoMat : meshMat;
+    }
+  });
+}
 
 // ════════════════════════════════════════════════════════════════
 // SECTION 5: MESH RENDERING
@@ -591,6 +854,13 @@ function renderMesh(meshData, sdfObj) {
       normals[i] = n[0]; normals[i+1] = n[1]; normals[i+2] = n[2];
     }
     geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  }
+
+  // Apply topology overlay (face colors + labels)
+  if (sdfObj) {
+    applyTopoOverlay(sdfObj, geometry);
+    topoGroup.visible = topoEnabled;
+    if (topoEnabled) mesh.material = topoMat;
   }
 
   // Update status
@@ -754,6 +1024,12 @@ document.getElementById('btn-res').addEventListener('click', () => {
   meshResolution = resolutions[(idx + 1) % resolutions.length];
   document.getElementById('btn-res').textContent = `Res: ${meshResolution}`;
   if (currentSDF) executeCode(codeEl.value);
+});
+
+// Topo toggle
+document.getElementById('btn-topo').addEventListener('click', () => {
+  Audio.click();
+  toggleTopo();
 });
 
 // Sound toggle
