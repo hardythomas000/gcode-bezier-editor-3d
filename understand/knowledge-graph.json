@@ -1,0 +1,100 @@
+{
+  "version": "1.0",
+  "kind": "codebase",
+  "project": {
+    "name": "gcode-bezier-editor-3d",
+    "languages": [
+      "HTML"
+    ],
+    "frameworks": [
+      "unknown"
+    ],
+    "description": "Generated static file-level graph for mobile viewing.",
+    "analyzedAt": "2026-05-08T13:19:02.7801056Z",
+    "gitCommitHash": "b6e0f1e978ff18db4d5b90a0af1f536c25f5d754"
+  },
+  "nodes": [
+    {
+      "id": "project:gcode-bezier-editor-3d",
+      "type": "module",
+      "name": "gcode-bezier-editor-3d",
+      "summary": "gcode-bezier-editor-3d project root",
+      "tags": [
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:agent-cad.html",
+      "type": "document",
+      "name": "agent-cad.html",
+      "filePath": "agent-cad.html",
+      "summary": "Project file: agent-cad.html",
+      "tags": [
+        "root",
+        "HTML"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:index.html",
+      "type": "document",
+      "name": "index.html",
+      "filePath": "index.html",
+      "summary": "Project file: index.html",
+      "tags": [
+        "root",
+        "HTML"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "project:gcode-bezier-editor-3d",
+      "target": "file:agent-cad.html",
+      "type": "contains",
+      "direction": "forward",
+      "description": "Project contains agent-cad.html",
+      "weight": 0.7
+    },
+    {
+      "source": "project:gcode-bezier-editor-3d",
+      "target": "file:index.html",
+      "type": "contains",
+      "direction": "forward",
+      "description": "Project contains index.html",
+      "weight": 0.7
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:root",
+      "name": "root",
+      "description": "Files under root",
+      "nodeIds": [
+        "file:agent-cad.html",
+        "file:index.html"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Project overview",
+      "description": "Start at the project node, then inspect major folders/files.",
+      "nodeIds": [
+        "project:gcode-bezier-editor-3d"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "Source files",
+      "description": "Use search or the file explorer to jump into specific files.",
+      "nodeIds": [
+        "file:agent-cad.html",
+        "file:index.html"
+      ]
+    }
+  ]
+}
